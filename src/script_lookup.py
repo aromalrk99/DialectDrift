@@ -8,30 +8,22 @@ URIEL/lang2vec does not provide a "script" feature.
 """
 
 SCRIPTS = {
-    "eng": "Latin",
-    "spa": "Latin",
-    "fra": "Latin",
-    "deu": "Latin",
-    "ita": "Latin",
-    "por": "Latin",
-    "nld": "Latin",
-    "rus": "Cyrillic",
-    "pol": "Latin",
-    "cmn": "Han",
-    "jpn": "Japanese",       # Kanji + Hiragana/Katakana, treated as its own system
-    "kor": "Hangul",
-    "arb": "Arabic",
-    "hin": "Devanagari",
-    "tur": "Latin",
-    "vie": "Latin",          # Latin script with diacritics (Chữ Quốc Ngữ)
-    "tha": "Thai",
-    "swh": "Latin",
-    "fin": "Latin",
-    "hun": "Latin",
-    "ell": "Greek",
-    "heb": "Hebrew",
-    "ind": "Latin",
-    "tgl": "Latin",
+    "ces": "Latin",
+    "swe": "Latin",
+    "nor": "Latin",
+    "dan": "Latin",
+    "ron": "Latin",
+    "ukr": "Cyrillic",
+    "ben": "Bengali",
+    "urd": "Arabic",
+    "pan": "Gurmukhi",
+    "tam": "Tamil",
+    "tel": "Telugu",
+    "mar": "Devanagari",
+    "jav": "Latin",
+    "mya": "Myanmar",
+    "khm": "Khmer",
+    "amh": "Geez",
 }
 
 def same_script(lang1: str, lang2: str) -> int:

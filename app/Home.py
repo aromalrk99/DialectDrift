@@ -8,7 +8,8 @@ import streamlit as st
 from common import load_data, load_metrics
 
 st.set_page_config(page_title="DialectDrift", page_icon="🗺️", layout="centered")
-
+from common import apply_theme
+apply_theme()
 st.title("DialectDrift")
 st.caption("A linguistic-distance-based language learning difficulty predictor")
 

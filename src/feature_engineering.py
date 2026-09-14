@@ -1,22 +1,35 @@
 """
-Step 2: Build a (native_language, target_language) feature table
-and a transparent, clearly-labeled difficulty score.
+Step 2 (v2): Advanced feature engineering.
+
+Adds, on top of v1's Euclidean distances:
+- Cosine distance for each core feature type (direction/shape similarity,
+  a genuinely different signal from Euclidean magnitude distance)
+- PCA-based combined typological distance (dimensionality reduction across
+  all feature types into one joint space)
+- KMeans-based language clustering -> same_cluster feature (data-driven
+  grouping, distinct from the raw Glottolog family-membership feature)
+- native_cluster_size (how many of our languages share the native language's
+  cluster) as a rough "linguistic neighborhood size" proxy
 """
 
 import pandas as pd
 import numpy as np
 from itertools import permutations
-from scipy.spatial.distance import euclidean
-import ast
+from scipy.spatial.distance import euclidean, cosine
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
 
 from script_lookup import same_script
 
 RAW_PATH = "data/raw/uriel_raw_features.csv"
 OUT_PATH = "data/processed/language_pairs_features.csv"
 
+CORE_SETS = ["geo", "fam", "syntax_knn", "phonology_knn", "inventory_knn"]
+N_CLUSTERS = 6
+N_PCA_COMPONENTS = 10
+
 
 def load_raw_vectors():
-    """Reload the raw URIEL vectors and pivot into {feature_set: {lang: np.array}}."""
     df = pd.read_csv(RAW_PATH)
     vectors = {}
     for fs in df["feature_set"].unique():
@@ -28,70 +41,94 @@ def load_raw_vectors():
     return vectors
 
 
-def build_pair_table(vectors):
+def build_combined_matrix(vectors, languages):
+    """Concatenate all core feature vectors per language into one big vector."""
+    combined = {
+        lang: np.concatenate([vectors[fs][lang] for fs in CORE_SETS])
+        for lang in languages
+    }
+    X = np.array([combined[l] for l in languages])
+    return combined, X
+
+
+def fit_pca_and_clusters(X, languages):
+    pca = PCA(n_components=N_PCA_COMPONENTS, random_state=42)
+    X_pca = pca.fit_transform(X)
+    pca_vectors = {lang: X_pca[i] for i, lang in enumerate(languages)}
+
+    km = KMeans(n_clusters=N_CLUSTERS, random_state=42, n_init=10)
+    cluster_labels = km.fit_predict(X)
+    clusters = {lang: int(cluster_labels[i]) for i, lang in enumerate(languages)}
+
+    explained_var = pca.explained_variance_ratio_.sum()
+    print(f"PCA: {N_PCA_COMPONENTS} components explain "
+          f"{explained_var:.1%} of variance in the combined feature space.")
+
+    return pca_vectors, clusters
+
+
+def build_pair_table(vectors, pca_vectors, clusters):
     languages = list(vectors["geo"].keys())
+    cluster_sizes = pd.Series(clusters).value_counts().to_dict()
     rows = []
 
     for native, target in permutations(languages, 2):
-        geo_dist = euclidean(vectors["geo"][native], vectors["geo"][target])
-        fam_dist = euclidean(vectors["fam"][native], vectors["fam"][target])
-        phon_dist = euclidean(vectors["phonology_knn"][native], vectors["phonology_knn"][target])
-        syn_dist = euclidean(vectors["syntax_knn"][native], vectors["syntax_knn"][target])
-        inv_dist = euclidean(vectors["inventory_knn"][native], vectors["inventory_knn"][target])
-        script_match = same_script(native, target)
+        row = {"native": native, "target": target}
 
-        rows.append({
-            "native": native,
-            "target": target,
-            "geographic_distance": geo_dist,
-            "family_distance": fam_dist,
-            "phonological_distance": phon_dist,
-            "syntactic_distance": syn_dist,
-            "inventory_distance": inv_dist,
-            "same_script": script_match,
-        })
+        # Euclidean + cosine distance per core feature type
+        for fs in CORE_SETS:
+            v1, v2 = vectors[fs][native], vectors[fs][target]
+            row[f"{fs}_euclidean"] = euclidean(v1, v2)
+            row[f"{fs}_cosine"] = cosine(v1, v2)
+
+        # PCA-based combined typological distance
+        row["pca_combined_distance"] = euclidean(pca_vectors[native], pca_vectors[target])
+
+        # Cluster-based features
+        row["same_cluster"] = int(clusters[native] == clusters[target])
+        row["native_cluster_size"] = cluster_sizes[clusters[native]]
+
+        # Script similarity (manual lookup)
+        row["same_script"] = same_script(native, target)
+
+        rows.append(row)
 
     return pd.DataFrame(rows)
 
 
 def normalize(series):
-    """Min-max normalize a column to [0, 1] so features are comparable."""
     return (series - series.min()) / (series.max() - series.min())
 
 
 def add_difficulty_score(df):
     """
     Transparent composite difficulty score, 0 (easiest) to 1 (hardest).
+    Formula unchanged in spirit from v1 -- still built ONLY from the core
+    Euclidean distances, so it stays interpretable. The new cosine/PCA/
+    cluster features are extra model inputs, not part of the target formula
+    itself, which keeps them from just re-deriving the label trivially.
 
-    Formula (weights are a subjective, clearly-labeled design choice —
-    NOT derived from any ground-truth learner outcome data):
-
-        difficulty = 0.30 * family_distance_norm
-                   + 0.25 * phonological_distance_norm
-                   + 0.20 * syntactic_distance_norm
-                   + 0.15 * inventory_distance_norm
-                   + 0.05 * geographic_distance_norm
+        difficulty = 0.30 * fam_euclidean_norm
+                   + 0.25 * phonology_knn_euclidean_norm
+                   + 0.20 * syntax_knn_euclidean_norm
+                   + 0.15 * inventory_knn_euclidean_norm
+                   + 0.05 * geo_euclidean_norm
                    + 0.05 * (1 - same_script)
 
-    Rationale for weights: family and phonological distance are typically
-    considered the strongest drivers of subjective learning difficulty in
-    L2 acquisition literature (e.g. FSI language difficulty rankings),
-    followed by syntax and sound inventory; geography and script are
-    included as smaller adjustments since they correlate with but don't
-    directly cause difficulty.
+    Weights are a subjective design choice loosely informed by L2-acquisition
+    literature (family and phonological distance as strongest difficulty
+    drivers), NOT fit to any ground-truth learner outcome data.
     """
-    df["family_distance_norm"] = normalize(df["family_distance"])
-    df["phonological_distance_norm"] = normalize(df["phonological_distance"])
-    df["syntactic_distance_norm"] = normalize(df["syntactic_distance"])
-    df["inventory_distance_norm"] = normalize(df["inventory_distance"])
-    df["geographic_distance_norm"] = normalize(df["geographic_distance"])
+    for col in ["fam_euclidean", "phonology_knn_euclidean", "syntax_knn_euclidean",
+                "inventory_knn_euclidean", "geo_euclidean"]:
+        df[f"{col}_norm"] = normalize(df[col])
 
     df["difficulty_score"] = (
-        0.30 * df["family_distance_norm"] +
-        0.25 * df["phonological_distance_norm"] +
-        0.20 * df["syntactic_distance_norm"] +
-        0.15 * df["inventory_distance_norm"] +
-        0.05 * df["geographic_distance_norm"] +
+        0.30 * df["fam_euclidean_norm"] +
+        0.25 * df["phonology_knn_euclidean_norm"] +
+        0.20 * df["syntax_knn_euclidean_norm"] +
+        0.15 * df["inventory_knn_euclidean_norm"] +
+        0.05 * df["geo_euclidean_norm"] +
         0.05 * (1 - df["same_script"])
     )
     return df
@@ -99,10 +136,18 @@ def add_difficulty_score(df):
 
 if __name__ == "__main__":
     vectors = load_raw_vectors()
-    df = build_pair_table(vectors)
+    languages = list(vectors["geo"].keys())
+
+    combined, X = build_combined_matrix(vectors, languages)
+    pca_vectors, clusters = fit_pca_and_clusters(X, languages)
+
+    df = build_pair_table(vectors, pca_vectors, clusters)
     df = add_difficulty_score(df)
     df.to_csv(OUT_PATH, index=False)
-    print(f"Built {len(df)} language pairs.")
-    print(df[["native", "target", "difficulty_score"]].sort_values("difficulty_score").head(10))
-    print("...")
-    print(df[["native", "target", "difficulty_score"]].sort_values("difficulty_score").tail(10))
+
+    print(f"\nBuilt {len(df)} language pairs with {df.shape[1]} columns.")
+    print(f"Columns: {list(df.columns)}")
+    print("\nEasiest pairs:")
+    print(df[["native", "target", "difficulty_score"]].sort_values("difficulty_score").head(5))
+    print("\nHardest pairs:")
+    print(df[["native", "target", "difficulty_score"]].sort_values("difficulty_score").tail(5))
