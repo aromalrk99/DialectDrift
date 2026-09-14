@@ -1,0 +1,14 @@
+{
+  "rmse": 0.017321797106880348,
+  "r2": 0.9724323255225416,
+  "feature_importances": {
+    "phonological_distance": 0.5092081535930588,
+    "family_distance": 0.22113326459500116,
+    "geographic_distance": 0.11941616565606479,
+    "syntactic_distance": 0.0873842668558217,
+    "inventory_distance": 0.04931640880325113,
+    "same_script": 0.013541740496802498
+  },
+  "n_train": 441,
+  "n_test": 111
+}
